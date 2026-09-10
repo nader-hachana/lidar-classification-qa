@@ -4,11 +4,11 @@ Pass 1 takes a probabilistic subsample of points, its size is a fixed
 target, not a fraction tied to the file, to build a per-cell ground grid.
 Pass 2 streams the file again in fixed-size chunks, folding each chunk into
 running per-column accumulators (sum, sum of squares, count, max,
-classification counts). Peak memory in both passes is bounded by the number
-of grid columns and the sample size, not by how many points are in the
-file, the same principle the ground-up streaming design in
-copc-pointcloud-pipeline (github.com/nader-hachana/copc-pointcloud-pipeline)
-is built on.
+classification counts, real-ground fraction). Peak memory in both passes is
+bounded by the number of grid columns and the sample size, not by how many
+points are in the file, the same principle the ground-up streaming design
+in copc-pointcloud-pipeline
+(github.com/nader-hachana/copc-pointcloud-pipeline) is built on.
 """
 
 import laspy
@@ -22,19 +22,23 @@ def estimate_ground_grid_streaming(
     ground_cell_size: float,
     sample_size: int = 3_000_000,
     chunk_size: int = 2_000_000,
+    ground_class: int = 2,
     percentile: float = 10.0,
     seed: int = 0,
-) -> tuple[np.ndarray, float, float, int, int]:
+    max_class: int = 32,
+) -> tuple[np.ndarray, np.ndarray, float, float, int, int]:
     """Ground grid from a probabilistic subsample sized independent of the file's total point count.
 
     ground_cell_size is deliberately meant to be coarser than the cell size
     used later for column analysis. A cell fully covered by a flat elevated
-    structure has few or no real ground returns of its own, a low
-    percentile computed only from that cell would grab a structure point
-    instead of the ground. A coarser cell reaches past the structure's own
-    footprint to real ground nearby, the same principle as computing a
-    terrain model at a coarser resolution than the surface analysis built
-    on top of it.
+    structure has few or no real ground returns of its own, a coarse cell
+    reaches past a structure's own footprint to real ground nearby.
+
+    Returns (ground_z, has_local_ground, xmin, ymin, nx, ny). See
+    enrich.compute_ground_grid() for what has_local_ground means and why it
+    matters: cells with no real ground-classified points nearby get an
+    estimate borrowed from elsewhere, which on hilly or heavily forested
+    terrain can be badly wrong, and flagging shouldn't trust it.
     """
     with laspy.open(path) as f:
         header = f.header
@@ -47,24 +51,30 @@ def estimate_ground_grid_streaming(
         sample_x: list[np.ndarray] = []
         sample_y: list[np.ndarray] = []
         sample_z: list[np.ndarray] = []
+        sample_c: list[np.ndarray] = []
         for chunk in f.chunk_iterator(chunk_size):
             keep = rng.random(len(chunk.x)) < fraction
             if keep.any():
                 sample_x.append(np.asarray(chunk.x)[keep])
                 sample_y.append(np.asarray(chunk.y)[keep])
                 sample_z.append(np.asarray(chunk.z)[keep])
+                sample_c.append(np.clip(np.asarray(chunk.classification)[keep].astype(np.int64), 0, max_class - 1))
 
     x = np.concatenate(sample_x)
     y = np.concatenate(sample_y)
     z = np.concatenate(sample_z)
+    classification = np.concatenate(sample_c)
 
-    ground_z, ground_nx, ground_ny = compute_ground_grid(x, y, z, xmin, ymin, xmax, ymax, ground_cell_size, percentile)
-    return ground_z, xmin, ymin, ground_nx, ground_ny
+    ground_z, has_local_ground, ground_nx, ground_ny = compute_ground_grid(
+        x, y, z, classification, xmin, ymin, xmax, ymax, ground_cell_size, ground_class, percentile
+    )
+    return ground_z, has_local_ground, xmin, ymin, ground_nx, ground_ny
 
 
 def scan_columns_streaming(
     path: str,
     ground_z: np.ndarray,
+    has_local_ground: np.ndarray,
     xmin: float,
     ymin: float,
     ground_cell_size: float,
@@ -83,9 +93,9 @@ def scan_columns_streaming(
     works on the result of either function without caring which one produced it.
 
     ground_cell_size/ground_nx/ground_ny describe the (coarser) grid ground_z
-    was estimated on, cell_size/nx/ny describe the (finer) grid used for the
-    column statistics below, the two are deliberately different resolutions,
-    see estimate_ground_grid_streaming().
+    and has_local_ground were estimated on, cell_size/nx/ny describe the
+    (finer) grid used for the column statistics below, the two are
+    deliberately different resolutions, see estimate_ground_grid_streaming().
 
     Points near the ground (hag < min_hag) are dropped from every chunk
     before folding it into the running totals, for the same reason
@@ -99,6 +109,7 @@ def scan_columns_streaming(
     sum_z2 = np.zeros(n_cells)
     sum_hag = np.zeros(n_cells)
     max_hag = np.zeros(n_cells)
+    sum_real_ground = np.zeros(n_cells)
     class_counts = np.zeros(n_cells * max_class, dtype=np.int64)
 
     with laspy.open(path) as f:
@@ -110,6 +121,7 @@ def scan_columns_streaming(
 
             ground_cell_id = compute_cell_id(x, y, xmin, ymin, ground_cell_size, ground_nx, ground_ny)
             hag_all = np.maximum(z - ground_z[ground_cell_id], 0.0)
+            real_ground_all = has_local_ground[ground_cell_id]
             cell_id_all = compute_cell_id(x, y, xmin, ymin, cell_size, nx, ny)
 
             keep = hag_all >= min_hag
@@ -117,11 +129,13 @@ def scan_columns_streaming(
             z = z[keep]
             hag = hag_all[keep]
             classification = classification[keep]
+            real_ground = real_ground_all[keep]
 
             count += np.bincount(cell_id, minlength=n_cells)
             sum_z += np.bincount(cell_id, weights=z, minlength=n_cells)
             sum_z2 += np.bincount(cell_id, weights=z**2, minlength=n_cells)
             sum_hag += np.bincount(cell_id, weights=hag, minlength=n_cells)
+            sum_real_ground += np.bincount(cell_id, weights=real_ground.astype(np.float64), minlength=n_cells)
 
             chunk_max = np.zeros(n_cells)
             np.maximum.at(chunk_max, cell_id, hag)
@@ -135,6 +149,7 @@ def scan_columns_streaming(
     variance = np.divide(sum_z2, count, out=np.zeros(n_cells), where=has_points) - z_mean**2
     z_std = np.sqrt(np.maximum(variance, 0.0))
     hag_mean = np.divide(sum_hag, count, out=np.zeros(n_cells), where=has_points)
+    real_ground_fraction = np.divide(sum_real_ground, count, out=np.zeros(n_cells), where=has_points)
 
     class_counts = class_counts.reshape(n_cells, max_class)
     majority_class = class_counts.argmax(axis=1)
@@ -155,4 +170,5 @@ def scan_columns_streaming(
         "hag_max": max_hag[has_points],
         "majority_class": majority_class[has_points],
         "majority_fraction": majority_fraction[has_points],
+        "real_ground_fraction": real_ground_fraction[has_points],
     }

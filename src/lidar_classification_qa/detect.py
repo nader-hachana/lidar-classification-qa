@@ -27,6 +27,7 @@ def aggregate_columns(
     z: np.ndarray,
     hag: np.ndarray,
     classification: np.ndarray,
+    real_ground: np.ndarray,
     xmin: float,
     ymin: float,
     cell_size: float,
@@ -38,9 +39,19 @@ def aggregate_columns(
     """Collapse points into 2D (x, y) columns and summarize each one.
 
     Per column: point count, vertical spread of Z (the flatness signal),
-    mean and max height above ground, and the majority classification with
-    how pure that majority is (a column split 50/50 between two classes is
-    a much weaker signal than one that's 95% a single class).
+    mean and max height above ground, the majority classification with how
+    pure that majority is (a column split 50/50 between two classes is a
+    much weaker signal than one that's 95% a single class), and what
+    fraction of the column's points have a height above ground resting on
+    real local ground data rather than a borrowed estimate.
+
+    real_ground is a per-point boolean, see enrich.on_real_ground(): it
+    exists because on hilly or heavily forested terrain a meaningful chunk
+    of cells never get a real ground return (dense canopy blocks it), and
+    height above ground borrowed from a distant cell there can be off by
+    tens of meters, exactly the kind of error that fakes a "tall flat
+    structure". A caller should require real_ground_fraction to be high
+    before trusting a flag built on it.
 
     Points near the ground (hag < min_hag) are dropped before aggregating.
     Without this, a column's own real ground returns get folded into the
@@ -54,7 +65,14 @@ def aggregate_columns(
 
     if min_hag > 0:
         keep = hag >= min_hag
-        x, y, z, hag, classification = x[keep], y[keep], z[keep], hag[keep], classification[keep]
+        x, y, z, hag, classification, real_ground = (
+            x[keep],
+            y[keep],
+            z[keep],
+            hag[keep],
+            classification[keep],
+            real_ground[keep],
+        )
 
     cell_id = compute_cell_id(x, y, xmin, ymin, cell_size, nx, ny)
     unique_cells, inverse, n_points = np.unique(cell_id, return_inverse=True, return_counts=True)
@@ -69,6 +87,7 @@ def aggregate_columns(
 
     z_mean, z_std = mean_and_std(z)
     hag_mean, _ = mean_and_std(hag)
+    real_ground_fraction, _ = mean_and_std(real_ground.astype(np.float64))
 
     hag_max = np.zeros(n)
     np.maximum.at(hag_max, inverse, hag)
@@ -92,6 +111,7 @@ def aggregate_columns(
         "hag_max": hag_max,
         "majority_class": majority_class,
         "majority_fraction": majority_fraction,
+        "real_ground_fraction": real_ground_fraction,
     }
 
 
@@ -101,6 +121,8 @@ def flag_likely_structure(
     min_height: float = 10.0,
     max_vertical_std: float = 1.0,
     min_purity: float = 0.7,
+    min_points: int = 5,
+    min_real_ground_fraction: float = 1.0,
 ) -> np.ndarray:
     """Columns labeled vegetation that are too tall and too flat to be real vegetation.
 
@@ -108,9 +130,21 @@ def flag_likely_structure(
     reach, and 1m of vertical spread, a real roof or wall is usually flatter
     than this): this is a coarse first pass meant to surface candidates for
     a human to check, not a silent auto-correction of the classification.
+
+    min_points guards against a handful of stray or noisy returns looking
+    like a confident detection, a single outlier point is flat and tall by
+    definition, it has no spread to measure. min_real_ground_fraction
+    guards against the height above ground itself being wrong: default 1.0
+    means every contributing point must rest on a real local ground
+    measurement, not one borrowed from a distant cell, found necessary
+    after testing on hillside/forest terrain where borrowed ground can be
+    off by tens of meters and silently manufactures "tall flat" columns
+    that aren't real.
     """
     is_vegetation = np.isin(columns["majority_class"], list(vegetation_classes))
     is_tall = columns["hag_max"] >= min_height
     is_flat = columns["z_std"] <= max_vertical_std
     is_pure = columns["majority_fraction"] >= min_purity
-    return is_vegetation & is_tall & is_flat & is_pure
+    has_enough_points = columns["n_points"] >= min_points
+    has_real_ground = columns["real_ground_fraction"] >= min_real_ground_fraction
+    return is_vegetation & is_tall & is_flat & is_pure & has_enough_points & has_real_ground

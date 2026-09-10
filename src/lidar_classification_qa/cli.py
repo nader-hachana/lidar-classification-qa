@@ -33,14 +33,25 @@ def main() -> None:
     parser.add_argument("--min-height", type=float, default=10.0, help="Min height above ground to flag, in meters")
     parser.add_argument("--max-vertical-std", type=float, default=1.0, help="Max vertical spread to flag, in meters")
     parser.add_argument("--min-purity", type=float, default=0.7, help="Min fraction of a column in the majority class")
+    parser.add_argument("--min-points", type=int, default=5, help="Min points in a column to trust a flag")
+    parser.add_argument(
+        "--min-real-ground-fraction",
+        type=float,
+        default=1.0,
+        help="Min fraction of a column's points resting on real (not borrowed) ground data to trust a flag",
+    )
     parser.add_argument("--output", help="Optional CSV path to write flagged columns to")
     args = parser.parse_args()
 
     print(f"Pass 1/2: estimating ground grid from a {args.sample_size:,}-point sample...", file=sys.stderr)
-    ground_z, xmin, ymin, ground_nx, ground_ny = estimate_ground_grid_streaming(
-        args.path, args.ground_cell_size, args.sample_size, args.chunk_size, args.ground_percentile
+    ground_z, has_local_ground, xmin, ymin, ground_nx, ground_ny = estimate_ground_grid_streaming(
+        args.path, args.ground_cell_size, args.sample_size, args.chunk_size, percentile=args.ground_percentile
     )
-    print(f"Ground grid: {ground_nx} x {ground_ny} cells at {args.ground_cell_size}m", file=sys.stderr)
+    print(
+        f"Ground grid: {ground_nx} x {ground_ny} cells at {args.ground_cell_size}m, "
+        f"{has_local_ground.sum():,} with real local ground data ({100 * has_local_ground.mean():.1f}%)",
+        file=sys.stderr,
+    )
 
     with laspy.open(args.path) as f:
         xmax, ymax = float(f.header.maxs[0]), float(f.header.maxs[1])
@@ -52,6 +63,7 @@ def main() -> None:
     columns = scan_columns_streaming(
         args.path,
         ground_z,
+        has_local_ground,
         xmin,
         ymin,
         args.ground_cell_size,
@@ -69,6 +81,8 @@ def main() -> None:
         min_height=args.min_height,
         max_vertical_std=args.max_vertical_std,
         min_purity=args.min_purity,
+        min_points=args.min_points,
+        min_real_ground_fraction=args.min_real_ground_fraction,
     )
 
     n_occupied = len(columns["cell_id"])
@@ -96,7 +110,16 @@ def main() -> None:
         with open(args.output, "w", newline="") as fout:
             writer = csv.writer(fout)
             writer.writerow(
-                ["x_center", "y_center", "hag_max", "z_std", "majority_class", "majority_fraction", "n_points"]
+                [
+                    "x_center",
+                    "y_center",
+                    "hag_max",
+                    "z_std",
+                    "majority_class",
+                    "majority_fraction",
+                    "n_points",
+                    "real_ground_fraction",
+                ]
             )
             for i in np.flatnonzero(flagged):
                 writer.writerow(
@@ -108,6 +131,7 @@ def main() -> None:
                         columns["majority_class"][i],
                         columns["majority_fraction"][i],
                         columns["n_points"][i],
+                        columns["real_ground_fraction"][i],
                     ]
                 )
         print(f"\nWrote {n_flagged} flagged columns to {args.output}")
