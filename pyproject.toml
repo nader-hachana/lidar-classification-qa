@@ -1,0 +1,27 @@
+[project]
+name = "lidar-classification-qa"
+version = "0.1.0"
+description = "Flags LiDAR points labeled as vegetation that geometrically behave like flat structures, catching classification errors before they ship."
+readme = "README.md"
+authors = [
+    { name = "Mohamed Neder Hachana", email = "naderhachana96@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "laspy>=2.7.0",
+    "lazrs>=0.8.2",
+    "numpy>=2.2.6",
+    "scipy>=1.15.3",
+]
+
+[project.scripts]
+lidar-classification-qa = "lidar_classification_qa.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
