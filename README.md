@@ -58,7 +58,23 @@ A useful negative control: Autzen is a reference "classified" dataset, not one a
 2,621 occupied columns, 0 flagged as likely misclassified vegetation
 ```
 
-A clean negative, and not a trivial one: this file has real vegetation in it (class 3, 2.0% of all points), so there was something to get wrong, and nothing was flagged. One data point toward the tool not just being trigger-happy on data it hasn't seen before.
+A clean negative, and not a trivial one: this file has real vegetation in it (class 3, 2.0% of all points), so there was something to get wrong, and nothing was flagged.
+
+### Wolverine Glacier (45,695,116 points, cropped ~1km² of alpine terrain, 118m of real elevation change)
+
+```
+57,153 occupied columns, 0 flagged as likely misclassified vegetation
+```
+
+Another clean negative with real signal to get wrong: 94.1% ground, 5.9% real vegetation (class 4), and 100% of ground cells backed by real local measurements, open alpine terrain doesn't have the canopy-blocks-the-laser problem forested terrain does. Cropped from a public dataset covering roughly 1.79 billion points total, using PDAL's EPT reader with a bounding-box query rather than downloading the full file.
+
+### Two datasets that turned out not to be meaningful tests
+
+Not every public sample is usable as-is. Two more EPT datasets were pulled in and are worth naming so the results above aren't read as more thorough than they are:
+
+- **Red Rocks Amphitheatre** (4,004,326 points): 0 flagged, but the file is 100% class 0, never classified at all. There's no ground truth to anchor height-above-ground to, so nothing could be evaluated either way.
+- **Mount St. Helens** (12,388,139 points): 0 flagged, real ground classification exists (81% of cells), but the file has no vegetation classes at all, only ground and unclassified. Nothing labeled vegetation existed to check.
+- **Hobbs, NM** (~24 billion points total): not tested. A 1km² crop of it alone came out to 658 million points, nearly double SoFi's entire dataset, landing on an unexpectedly dense area of what appears to be a full city/county-scale survey. The source also has genuinely corrupted tiles server-side (bad LAS headers, invalid LAZ chunk tables), independent of anything here. Skipped rather than pulling hundreds of millions more points for a demo.
 
 ## Try it
 
