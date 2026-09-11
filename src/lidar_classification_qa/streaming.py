@@ -1,14 +1,10 @@
 """Two-pass scan over a LAS/LAZ/COPC file, memory bounded independent of point count.
 
-Pass 1 takes a probabilistic subsample of points, its size is a fixed
-target, not a fraction tied to the file, to build a per-cell ground grid.
-Pass 2 streams the file again in fixed-size chunks, folding each chunk into
-running per-column accumulators (sum, sum of squares, count, max,
-classification counts, real-ground fraction). Peak memory in both passes is
-bounded by the number of grid columns and the sample size, not by how many
-points are in the file, the same principle the ground-up streaming design
-in copc-pointcloud-pipeline
-(github.com/nader-hachana/copc-pointcloud-pipeline) is built on.
+Pass 1 takes a fixed-size probabilistic subsample to build a per-cell
+ground grid. Pass 2 streams the file in fixed-size chunks, folding each
+chunk into running per-column accumulators. Peak memory in both passes is
+bounded by the sample size and the number of grid columns, not by how many
+points are in the file.
 """
 
 import laspy
@@ -27,18 +23,12 @@ def estimate_ground_grid_streaming(
     seed: int = 0,
     max_class: int = 32,
 ) -> tuple[np.ndarray, np.ndarray, float, float, int, int]:
-    """Ground grid from a probabilistic subsample sized independent of the file's total point count.
+    """Ground grid from a fixed-size subsample, independent of the file's total point count.
 
-    ground_cell_size is deliberately meant to be coarser than the cell size
-    used later for column analysis. A cell fully covered by a flat elevated
-    structure has few or no real ground returns of its own, a coarse cell
-    reaches past a structure's own footprint to real ground nearby.
-
-    Returns (ground_z, has_local_ground, xmin, ymin, nx, ny). See
-    enrich.compute_ground_grid() for what has_local_ground means and why it
-    matters: cells with no real ground-classified points nearby get an
-    estimate borrowed from elsewhere, which on hilly or heavily forested
-    terrain can be badly wrong, and flagging shouldn't trust it.
+    ground_cell_size should be coarser than the cell size used for column
+    analysis, so a cell fully covered by an elevated structure can still
+    reach real ground nearby. Returns (ground_z, has_local_ground, xmin,
+    ymin, nx, ny), see enrich.compute_ground_grid().
     """
     with laspy.open(path) as f:
         header = f.header
@@ -89,19 +79,10 @@ def scan_columns_streaming(
 ) -> dict:
     """Fold the file through in fixed-size chunks into running per-column accumulators.
 
-    Shaped to match aggregate_columns() in detect.py, so flag_likely_structure
-    works on the result of either function without caring which one produced it.
-
-    ground_cell_size/ground_nx/ground_ny describe the (coarser) grid ground_z
-    and has_local_ground were estimated on, cell_size/nx/ny describe the
-    (finer) grid used for the column statistics below, the two are
-    deliberately different resolutions, see estimate_ground_grid_streaming().
-
-    Points near the ground (hag < min_hag) are dropped from every chunk
-    before folding it into the running totals, for the same reason
-    aggregate_columns() does it: a column's own ground returns shouldn't
-    count toward the vertical-spread statistic of whatever is elevated
-    above them.
+    Shaped to match aggregate_columns() in detect.py. ground_cell_size/
+    ground_nx/ground_ny describe the ground grid, cell_size/nx/ny describe
+    the (finer) column analysis grid. Points near the ground (hag < min_hag)
+    are dropped before folding each chunk into the running totals.
     """
     n_cells = nx * ny
     count = np.zeros(n_cells, dtype=np.int64)

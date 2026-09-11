@@ -2,35 +2,30 @@ import numpy as np
 
 from lidar_classification_qa.detect import aggregate_columns, flag_likely_structure
 
-# Four columns, 2m apart on x so compute_cell_id keeps them in separate cells.
-# Ground is flat (z == height above ground) to keep the synthetic case simple.
-# real_ground is True everywhere by default: these scenes are meant to
-# isolate the shape/classification logic, not the ground-reliability gate,
-# which gets its own dedicated tests below.
+# Four columns, 2m apart on x so each falls in its own grid cell.
+# Ground is flat (z == height above ground) to keep this simple.
 
 
 def _scene():
-    # column 0, x~1: a real tree, class 4, real vertical spread from returns
-    # scattering off trunk, branches, and an uneven canopy top
+    # a real tree: class 4, real vertical spread
     tree_x = np.full(6, 1.0)
     tree_y = np.full(6, 1.0)
     tree_hag = np.array([1.0, 3.0, 5.0, 7.0, 9.0, 11.0])
     tree_class = np.full(6, 4)
 
-    # column 1, x~3: the real bug this repo is built around, a 138m roof
-    # canopy labeled class 4 ("medium vegetation"), flat because it's a roof
+    # a mislabeled roof: class 4, flat
     roof_x = np.full(5, 3.0)
     roof_y = np.full(5, 1.0)
     roof_hag = np.array([137.9, 138.0, 138.1, 137.95, 138.05])
     roof_class = np.full(5, 4)
 
-    # column 2, x~5: a real building, correctly labeled class 6
+    # a correctly labeled building: class 6
     building_x = np.full(5, 5.0)
     building_y = np.full(5, 1.0)
     building_hag = np.array([19.9, 20.0, 20.1, 19.95, 20.05])
     building_class = np.full(5, 6)
 
-    # column 3, x~7: real short grass, class 3, flat but nowhere near tall
+    # real short grass: class 3, flat but not tall
     grass_x = np.full(5, 7.0)
     grass_y = np.full(5, 1.0)
     grass_hag = np.array([0.2, 0.25, 0.3, 0.28, 0.22])
@@ -86,9 +81,7 @@ def test_short_flat_vegetation_is_not_flagged():
 
 def test_borrowed_ground_is_not_trusted_even_if_otherwise_a_match():
     # same roof column as _scene(), but its height above ground rests on
-    # borrowed, not real, ground data, this is the exact shape of the false
-    # positives found testing against real hillside/forest terrain, where a
-    # borrowed ground estimate can be tens of meters wrong
+    # borrowed, not real, ground data
     x = np.full(5, 3.0)
     y = np.full(5, 1.0)
     hag = np.array([137.9, 138.0, 138.1, 137.95, 138.05])
@@ -103,8 +96,7 @@ def test_borrowed_ground_is_not_trusted_even_if_otherwise_a_match():
 
 
 def test_a_handful_of_stray_points_is_not_trusted():
-    # three points is not enough to call a column's flatness confident,
-    # even if they happen to line up tall and flat and mislabeled
+    # three points isn't enough to call a column's flatness confident
     x = np.full(3, 3.0)
     y = np.full(3, 1.0)
     hag = np.array([137.9, 138.0, 138.1])

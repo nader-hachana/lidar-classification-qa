@@ -1,16 +1,11 @@
 """Flag points labeled as vegetation that geometrically behave like flat structures.
 
-The idea: real vegetation canopy has vertical structure, returns scatter
-across the trunk, branches, and an uneven top, so a column of "vegetation"
-points has real spread in Z. A flat roof or other hard structure does not,
-every return in that column sits close to the same height. A column that is
-both tall (height above ground far past what vegetation in the area
-realistically reaches) and flat (low vertical spread) but still labeled
-vegetation is very unlikely to actually be vegetation.
-
-This isn't a guess: it's how a real 138m stadium roof canopy showed up
-labeled class 4 ("medium vegetation") in a public LiDAR file, see the
-write-up in this repo's README.
+Real vegetation has vertical structure: returns scatter across trunk,
+branches, and an uneven top. A flat roof or other hard structure doesn't,
+every return sits close to the same height. A column that's both taller
+than real vegetation realistically reaches and flatter than real
+vegetation ever is, but still labeled vegetation, is very unlikely to
+actually be vegetation.
 
 ASPRS LAS classification codes used here: 2 = ground, 3/4/5 = low/medium/
 high vegetation, 6 = building.
@@ -38,28 +33,14 @@ def aggregate_columns(
 ) -> dict:
     """Collapse points into 2D (x, y) columns and summarize each one.
 
-    Per column: point count, vertical spread of Z (the flatness signal),
-    mean and max height above ground, the majority classification with how
-    pure that majority is (a column split 50/50 between two classes is a
-    much weaker signal than one that's 95% a single class), and what
-    fraction of the column's points have a height above ground resting on
-    real local ground data rather than a borrowed estimate.
+    Per column: point count, vertical spread of Z, mean/max height above
+    ground, majority classification and its purity, and the fraction of
+    points whose height above ground rests on real (not borrowed) ground
+    data, see enrich.on_real_ground().
 
-    real_ground is a per-point boolean, see enrich.on_real_ground(): it
-    exists because on hilly or heavily forested terrain a meaningful chunk
-    of cells never get a real ground return (dense canopy blocks it), and
-    height above ground borrowed from a distant cell there can be off by
-    tens of meters, exactly the kind of error that fakes a "tall flat
-    structure". A caller should require real_ground_fraction to be high
-    before trusting a flag built on it.
-
-    Points near the ground (hag < min_hag) are dropped before aggregating.
-    Without this, a column's own real ground returns get folded into the
-    same "vertical spread" statistic as whatever is above them, ground at
-    z=0 plus a flat roof at z=40 looks exactly like a huge vertical spread,
-    the opposite of what a flat roof should look like. The stats here
-    describe the shape of what's elevated in a column, not the column's
-    full ground-to-sky range.
+    Points near the ground (hag < min_hag) are dropped first, otherwise a
+    column's own ground returns get folded into its vertical-spread
+    statistic along with whatever is elevated above them.
     """
     from lidar_classification_qa.enrich import compute_cell_id
 
@@ -126,20 +107,11 @@ def flag_likely_structure(
 ) -> np.ndarray:
     """Columns labeled vegetation that are too tall and too flat to be real vegetation.
 
-    Defaults are deliberately conservative (10m, a real height a tree could
-    reach, and 1m of vertical spread, a real roof or wall is usually flatter
-    than this): this is a coarse first pass meant to surface candidates for
-    a human to check, not a silent auto-correction of the classification.
-
-    min_points guards against a handful of stray or noisy returns looking
-    like a confident detection, a single outlier point is flat and tall by
-    definition, it has no spread to measure. min_real_ground_fraction
-    guards against the height above ground itself being wrong: default 1.0
-    means every contributing point must rest on a real local ground
-    measurement, not one borrowed from a distant cell, found necessary
-    after testing on hillside/forest terrain where borrowed ground can be
-    off by tens of meters and silently manufactures "tall flat" columns
-    that aren't real.
+    min_points filters out single stray points, which are flat and tall by
+    definition since they have no spread to measure. min_real_ground_fraction
+    requires every contributing point to rest on real, not borrowed, ground
+    data, borrowed ground can be off by tens of meters on hilly terrain and
+    otherwise fakes "tall flat" columns that aren't real.
     """
     is_vegetation = np.isin(columns["majority_class"], list(vegetation_classes))
     is_tall = columns["hag_max"] >= min_height

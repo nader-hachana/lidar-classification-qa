@@ -41,9 +41,8 @@ def test_empty_cells_fill_from_nearest_neighbour_and_are_marked_unreliable():
 
 
 def test_non_ground_points_are_ignored_when_estimating_ground():
-    # a cell with one real ground point at z=0 and a pile of "vegetation"
-    # points at z=40 shouldn't have its ground estimate dragged up to 40,
-    # this is the exact bug a naive "percentile of everything" approach hits
+    # one real ground point at z=0, a pile of "vegetation" points at z=40,
+    # the ground estimate shouldn't get dragged up toward 40
     x = np.full(21, 0.5)
     y = np.full(21, 0.5)
     z = np.concatenate([[0.0], np.full(20, 40.0)])
